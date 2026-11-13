@@ -2,201 +2,155 @@ import streamlit as st
 from openai import OpenAI
 import anthropic
 from google import genai
+from datetime import datetime
 
-st.set_page_config(page_title="AI Round Table", page_icon="🗣️", layout="wide")
+st.set_page_config(page_title="AI 난장토론", page_icon="🎙️", layout="centered")
 
-# Read API keys from Streamlit's private Secrets store.
 def secret(name, default=""):
     try:
         return st.secrets.get(name, default)
     except Exception:
         return default
 
-# Optional simple password gate. Set APP_PASSWORD in Streamlit Secrets.
+# 기존 Streamlit Secrets의 접속 비밀번호 설정을 그대로 사용
 APP_PASSWORD = secret("APP_PASSWORD")
-if APP_PASSWORD:
-    if not st.session_state.get("authenticated", False):
-        st.title("🔐 AI Round Table")
-        entered = st.text_input("접속 비밀번호", type="password")
-        if st.button("입장", type="primary"):
-            if entered == APP_PASSWORD:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("비밀번호가 맞지 않습니다.")
-        st.stop()
+if APP_PASSWORD and not st.session_state.get("authenticated", False):
+    st.title("🔐 AI 난장토론")
+    entered = st.text_input("접속 비밀번호", type="password")
+    if st.button("입장", type="primary"):
+        if entered == APP_PASSWORD:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 맞지 않습니다.")
+    st.stop()
 
-st.title("🗣️ AI ROUND TABLE")
-st.caption("ChatGPT · Claude · Gemini | 세 AI가 독립적으로 의견을 내고, 서로 반박하고, 결론을 도출합니다.")
+st.title("🎙️ AI 난장토론")
+st.caption("세 AI가 한 번에 한 명씩 발언하며 실시간으로 주고받는 예능 토론")
+
+AGENTS = {
+    "ChatGPT": {"role": "말빨이 좋고 자신감 넘치는 논객. 상대의 말꼬리를 잡고 재치 있게 반박한다.", "emoji": "🤖", "stance": "이번 토론에서는 '닭이 먼저다'라는 입장을 맡아라."},
+    "Claude": {"role": "냉철하고 논리적인 팩트 폭격기. 차분하지만 뼈 있는 한마디를 던진다.", "emoji": "🧠", "stance": "이번 토론에서는 '달걀이 먼저다'라는 입장을 맡아라. 진화론과 생물학적 근거를 활용하라."},
+    "Gemini": {"role": "엉뚱하고 예측 불가능한 예능 캐릭터. 기상천외한 비유와 제3의 관점을 제시한다.", "emoji": "✨", "stance": "처음에는 중립적으로 양쪽을 듣고, 이후 독창적인 제3의 관점으로 끼어들어라."},
+}
 
 with st.sidebar:
     st.header("토론 설정")
-    rounds = st.selectbox("토론 라운드", [1, 2, 3], index=1,
-                          help="1=의견 제시, 2=상호 비판, 3=재반박까지 진행")
+    cycles = st.selectbox("토론 라운드", [1, 2, 3], index=2, help="첫 의견 발표 후, 각 라운드마다 세 AI가 한 명씩 번갈아 반박합니다.")
     st.markdown("---")
     st.subheader("사용 모델")
     openai_model = st.text_input("ChatGPT 모델 ID", value=secret("OPENAI_MODEL", "gpt-5.5"))
     claude_model = st.text_input("Claude 모델 ID", value=secret("CLAUDE_MODEL", "claude-sonnet-5-5"))
     gemini_model = st.text_input("Gemini 모델 ID", value=secret("GEMINI_MODEL", "gemini-3.8-flash"))
     st.markdown("---")
-    st.caption("API 키는 이 화면에 표시되지 않습니다. 사이트 관리자가 Streamlit Secrets에 안전하게 등록합니다.")
+    st.caption("API 키와 접속 비밀번호는 기존 Streamlit Secrets에서 읽어옵니다.")
 
-topic = st.text_area("토론 주제", placeholder="예: 90초 안에 만들 수 있는 가장 신기한 연금술 음식 영상은?", height=90)
-goal = st.text_input("토론 목표 (선택)", placeholder="예: 실제로 만들 수 있고 시청자가 끝까지 볼 만한 아이디어 1개 선정")
-conditions = st.text_area("추가 조건 (선택)", placeholder="예: 예산 3만 원 이하, 혼자 촬영, 안전한 식재료만 사용", height=75)
+topic = st.text_input("오늘의 토론 주제", value="닭이 먼저인가, 달걀이 먼저인가?")
+goal = st.text_input("토론 목표 (선택)", value="서로의 논리를 무너뜨리고, 가장 설득력 있고 웃긴 토론 승자를 가린다.")
+conditions = st.text_area("추가 조건 (선택)", value=(
+    "[프로그램 콘셉트: AI 난장토론]\n"
+    "과거 지상파 TV 토론 프로그램을 패러디한 예능이다. 보고서나 발표문처럼 말하지 말고 실제 패널처럼 자연스럽게 말한다.\n"
+    "상대방의 발언을 구체적으로 인용해 반박하고, 빈정거림·말장난·과장된 리액션·재치 있는 비유를 자연스럽게 활용한다.\n"
+    "서로 무조건 동의하지 말고 의견 충돌을 만든다. 억지로 웃기려 하지 말고 핵심을 짧고 강렬하게 전달한다.\n"
+    "ChatGPT는 닭파, Claude는 달걀파, Gemini는 중립에서 출발해 제3의 관점을 제시한다. 과학적 사실과 농담을 구분하고 사실을 꾸며내지 않는다."
+), height=165)
 
-agents = [
-    ("ChatGPT", "창의적인 전략가. 새로운 아이디어와 구체적인 실행 방법을 제안한다."),
-    ("Claude", "논리적인 비평가. 허점과 위험을 찾아내고 더 나은 대안을 제시한다."),
-    ("Gemini", "확장형 분석가. 관점을 넓히고 현실성, 차별성, 대중성을 검토한다."),
-]
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+if "chat_started" not in st.session_state:
+    st.session_state.chat_started = False
+if "debate_completed" not in st.session_state:
+    st.session_state.debate_completed = False
+
 
 def get_keys():
-    return {
-        "openai": secret("OPENAI_API_KEY"),
-        "anthropic": secret("ANTHROPIC_API_KEY"),
-        "gemini": secret("GEMINI_API_KEY"),
-    }
+    return {"openai": secret("OPENAI_API_KEY"), "anthropic": secret("ANTHROPIC_API_KEY"), "gemini": secret("GEMINI_API_KEY")}
 
-def ask_agent(name, role, prompt):
+
+def call_model(name, history):
     keys = get_keys()
+    agent = AGENTS[name]
     system = (
-        f"너는 AI ROUND TABLE의 참가자 {name}이다. {role} "
-        "한국어로 답하고, 구체적인 근거와 실행 가능한 제안을 제시하라. "
-        "다른 AI의 의견에 무조건 동의하지 말고 필요하면 분명하게 반박하라. "
-        "사실이 불확실하면 불확실하다고 밝혀라. 답변은 핵심 위주로 작성하라."
+        f"너는 AI 난장토론의 패널 {name}이다. 캐릭터: {agent['role']}\n"
+        f"이번 토론에서의 입장: {agent['stance']}\n\n"
+        "대화 규칙:\n"
+        "1. 직전 발언뿐 아니라 지금까지의 전체 대화를 읽고 반응하라.\n"
+        "2. 매번 새로운 발언 한 번만 하라. 혼자 여러 차례 말하지 마라.\n"
+        "3. 상대의 이름을 부르거나 실제 발언을 짚어 직접 대화하라.\n"
+        "4. 질문에 답하고, 허점이 보이면 반박하고, 필요하면 재치 있게 끼어들어라.\n"
+        "5. 유쾌하고 생생하게 말하되 한 번의 발언은 한국어 2~5문장으로 제한하라.\n"
+        "6. 보고서식 소제목이나 '첫째, 둘째' 구조를 쓰지 마라.\n"
+        "7. 토론을 혼자 끝내거나 최종 결론을 내리지 마라. 지금은 네 차례 발언만 하라.\n"
+        "8. 상대가 하지 않은 말을 지어내지 마라.\n\n"
+        f"추가 프로그램 규칙:\n{conditions}"
+    )
+    transcript = "\n\n".join(f"{m['speaker']}: {m['content']}" for m in history)
+    user_prompt = (
+        f"토론 주제: {topic}\n토론 목표: {goal or '재미있고 설득력 있는 토론'}\n\n"
+        f"지금까지의 대화:\n{transcript if transcript else '(아직 발언이 없습니다.)'}\n\n"
+        f"지금은 {name}의 발언 차례다. 앞선 발언에 직접 반응하며 네 차례 발언만 해라."
     )
     if name == "ChatGPT":
-        client = OpenAI(api_key=keys["openai"])
-        result = client.responses.create(
-            model=openai_model,
-            instructions=system,
-            input=prompt,
-            max_output_tokens=1200
-        )
-        return result.output_text
+        result = OpenAI(api_key=keys["openai"]).responses.create(model=openai_model, instructions=system, input=user_prompt, max_output_tokens=450)
+        return result.output_text.strip()
     if name == "Claude":
-        client = anthropic.Anthropic(api_key=keys["anthropic"])
-        result = client.messages.create(
-            model=claude_model,
-            max_tokens=1200,
-            system=system,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return "\n".join(x.text for x in result.content if getattr(x, "type", "") == "text")
-    client = genai.Client(api_key=keys["gemini"])
-    result = client.models.generate_content(
-        model=gemini_model,
-        contents=prompt,
-        config={"system_instruction": system, "max_output_tokens": 1200}
-    )
-    return result.text or "응답이 비어 있습니다."
-
-def debate_round(label, prompt):
-    st.subheader(label)
-    cols = st.columns(3)
-    answers = {}
-    for col, (name, role) in zip(cols, agents):
-        with col:
-            st.markdown(f"### {name}")
-            with st.spinner(f"{name}가 생각하는 중..."):
-                try:
-                    answer = ask_agent(name, role, prompt)
-                    answers[name] = answer
-                    st.markdown(answer)
-                except Exception as e:
-                    answers[name] = f"오류: {type(e).__name__}: {e}"
-                    st.error(f"{name} 응답 실패")
-                    st.caption("API 키, 모델 ID, 결제/사용 한도 또는 API 접근 권한을 확인해 주세요.")
-    return answers
-
-if st.button("🚀 세 AI 토론 시작", type="primary", use_container_width=True):
-    keys = get_keys()
-    missing = [label for label, value in [
-        ("OPENAI_API_KEY", keys["openai"]),
-        ("ANTHROPIC_API_KEY", keys["anthropic"]),
-        ("GEMINI_API_KEY", keys["gemini"]),
-    ] if not value]
-    if not topic.strip():
-        st.warning("먼저 토론 주제를 입력해 주세요.")
-    elif missing:
-        st.error("관리자가 Streamlit Secrets에 API 키를 등록해야 합니다: " + ", ".join(missing))
-    else:
-        st.session_state["debate"] = []
-        base = (
-            f"토론 주제: {topic}\n"
-            f"토론 목표: {goal or '가장 설득력 있고 유용한 결론 도출'}\n"
-            f"추가 조건: {conditions or '없음'}"
-        )
-        with st.container():
-            st.session_state["debate"].append((
-                "ROUND 1 · 독립 의견",
-                debate_round(
-                    "ROUND 1 · 독립 의견",
-                    base + "\n\n다른 참가자의 의견을 아직 모른다고 가정하고 독립적인 입장을 제시하라. "
-                    "핵심 주장, 이유, 구체적인 실행안, 예상되는 단점을 포함하라."
-                )
-            ))
-        if rounds >= 2:
-            all_previous = "\n\n".join(
-                f"[{stage}]\n" + "\n\n".join(f"{n}:\n{a}" for n, a in result.items())
-                for stage, result in st.session_state["debate"]
-            )
-            st.session_state["debate"].append((
-                "ROUND 2 · 상호 비판",
-                debate_round(
-                    "ROUND 2 · 상호 비판",
-                    base + "\n\n" + all_previous +
-                    "\n\n위의 모든 의견을 검토하고 다른 참가자의 주장 중 동의하는 점, 반박하는 점, "
-                    "놓친 관점, 개선안을 구분해 답하라. 구체적인 근거를 들어 토론하라."
-                )
-            ))
-        if rounds >= 3:
-            all_previous = "\n\n".join(
-                f"[{stage}]\n" + "\n\n".join(f"{n}:\n{a}" for n, a in result.items())
-                for stage, result in st.session_state["debate"]
-            )
-            st.session_state["debate"].append((
-                "ROUND 3 · 재반박 및 입장 수정",
-                debate_round(
-                    "ROUND 3 · 재반박 및 입장 수정",
-                    base + "\n\n" + all_previous +
-                    "\n\n앞선 비판에 답하라. 자신의 기존 주장을 유지할지 수정할지 분명히 밝히고, "
-                    "상대의 좋은 지적을 반영해 최종 제안을 개선하라."
-                )
-            ))
-        all_previous = "\n\n".join(
-            f"[{stage}]\n" + "\n\n".join(f"{n}:\n{a}" for n, a in result.items())
-            for stage, result in st.session_state["debate"]
-        )
-        st.session_state["debate"].append((
-            "FINAL · 최종 판단",
-            debate_round(
-                "FINAL · 최종 판단",
-                base + "\n\n" + all_previous +
-                "\n\n전체 토론을 바탕으로 최종 판단을 작성하라. "
-                "최종 추천안, 추천 이유, 남은 이견, 실행할 다음 단계를 정리하라. "
-                "억지로 합의하지 말고 세 참가자의 관점 차이를 인정하라."
-            )
-        ))
-
-if st.session_state.get("debate"):
-    st.divider()
-    st.header("토론 기록")
-    for stage, answers in st.session_state["debate"]:
-        with st.expander(stage, expanded=True):
-            tabs = st.tabs(list(answers.keys()))
-            for tab, (name, answer) in zip(tabs, answers.items()):
-                with tab:
-                    st.markdown(answer)
-    transcript = "\n\n".join(
-        f"\n{'='*16} {stage} {'='*16}\n" +
-        "\n\n".join(f"--- {name} ---\n{answer}" for name, answer in answers.items())
-        for stage, answers in st.session_state["debate"]
-    )
-    st.download_button("토론 기록 다운로드 (.txt)", transcript,
-                       file_name="AI_Round_Table_토론기록.txt", mime="text/plain",
-                       use_container_width=True)
+        result = anthropic.Anthropic(api_key=keys["anthropic"]).messages.create(model=claude_model, max_tokens=450, system=system, messages=[{"role": "user", "content": user_prompt}])
+        return "\n".join(x.text for x in result.content if getattr(x, "type", "") == "text").strip()
+    result = genai.Client(api_key=keys["gemini"]).models.generate_content(model=gemini_model, contents=user_prompt, config={"system_instruction": system, "max_output_tokens": 450})
+    return (result.text or "응답이 비어 있습니다.").strip()
 
 st.markdown("---")
-st.caption("안내: 각 AI는 해당 회사의 API로 별도 호출됩니다. ChatGPT·Claude·Gemini의 일반 웹 구독과 API 요금은 별개일 수 있습니다. 여러 라운드를 실행하면 API 사용료가 발생합니다.")
+st.subheader("💬 실시간 토론")
+for message in st.session_state.chat_messages:
+    with st.chat_message("assistant", avatar=AGENTS[message["speaker"]]["emoji"]):
+        st.markdown(f"**{message['speaker']}**")
+        st.markdown(message["content"])
+
+if st.button("🚀 AI 난장토론 시작", type="primary", use_container_width=True):
+    missing = [key for key, value in get_keys().items() if not value]
+    if not topic.strip():
+        st.warning("토론 주제를 입력해 주세요.")
+    elif missing:
+        st.error("Streamlit Secrets에 API 키가 누락되었습니다: " + ", ".join(missing))
+    else:
+        st.session_state.chat_messages = []
+        st.session_state.chat_started = True
+        st.session_state.debate_completed = False
+        st.rerun()
+
+if st.session_state.chat_started and not st.session_state.debate_completed:
+    # 오프닝은 각자 한 번씩. 이후에는 직전 대화 전체를 읽고 한 명씩 순서대로 응답.
+    turn_order = ["ChatGPT", "Claude", "Gemini"]
+    for _ in range(cycles):
+        turn_order.extend(["Claude", "Gemini", "ChatGPT"])
+    progress = st.progress(0, text="토론 패널 입장 중...")
+    total = len(turn_order)
+    for index, speaker in enumerate(turn_order):
+        with st.chat_message("assistant", avatar=AGENTS[speaker]["emoji"]):
+            st.markdown(f"**{speaker}**")
+            with st.spinner(f"{speaker}가 앞선 발언에 답변하는 중..."):
+                try:
+                    answer = call_model(speaker, st.session_state.chat_messages)
+                except Exception as error:
+                    answer = f"⚠️ 응답 실패: `{type(error).__name__}: {error}`\n\nAPI 키, 모델 ID, 결제 및 사용 한도를 확인해 주세요."
+            st.markdown(answer)
+        st.session_state.chat_messages.append({"speaker": speaker, "content": answer, "time": datetime.now().strftime("%H:%M:%S")})
+        progress.progress((index + 1) / total, text=f"{speaker} 발언 완료 ({index + 1}/{total})")
+    progress.empty()
+    st.session_state.debate_completed = True
+    st.success("토론이 끝났습니다! 전체 대화를 저장할 수 있어요.")
+    st.rerun()
+
+if st.session_state.debate_completed:
+    st.subheader("🏁 토론 종료")
+    st.info("토론이 끝났습니다. 가장 설득력 있는 주장과 가장 웃겼던 발언을 직접 골라보세요.")
+    transcript = "\n\n".join(f"--- {m['speaker']} ({m['time']}) ---\n{m['content']}" for m in st.session_state.chat_messages)
+    st.download_button("📥 토론 전체 기록 다운로드 (.txt)", transcript, file_name="AI_난장토론_기록.txt", mime="text/plain", use_container_width=True)
+    if st.button("🔄 새 토론 시작", use_container_width=True):
+        st.session_state.chat_messages = []
+        st.session_state.chat_started = False
+        st.session_state.debate_completed = False
+        st.rerun()
+
+st.markdown("---")
+st.caption("각 발언은 해당 AI 회사의 API를 개별 호출합니다. 발언 횟수와 길이에 따라 API 사용료가 발생합니다.")
