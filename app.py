@@ -78,7 +78,7 @@ def call_model(name, history):
         "2. 매번 새로운 발언 한 번만 하라. 혼자 여러 차례 말하지 마라.\n"
         "3. 상대의 이름을 부르거나 실제 발언을 짚어 직접 대화하라.\n"
         "4. 질문에 답하고, 허점이 보이면 반박하고, 필요하면 재치 있게 끼어들어라.\n"
-        "5. 유쾌하고 생생하게 말하되 한 번의 발언은 한국어 2~5문장으로 제한하라.\n"
+        "5. 유쾌하고 생생하게 말하되 한 번의 발언은 한국어 2~4문장, 약 80~130자 정도로 제한하라. 문장을 끝까지 완성하라.\n"
         "6. 보고서식 소제목이나 '첫째, 둘째' 구조를 쓰지 마라.\n"
         "7. 토론을 혼자 끝내거나 최종 결론을 내리지 마라. 지금은 네 차례 발언만 하라.\n"
         "8. 상대가 하지 않은 말을 지어내지 마라.\n\n"
@@ -91,13 +91,22 @@ def call_model(name, history):
         f"지금은 {name}의 발언 차례다. 앞선 발언에 직접 반응하며 네 차례 발언만 해라."
     )
     if name == "ChatGPT":
-        result = OpenAI(api_key=keys["openai"]).responses.create(model=openai_model, instructions=system, input=user_prompt, max_output_tokens=450)
+        client = OpenAI(api_key=keys["openai"])
+        result = client.responses.create(
+            model=openai_model,
+            instructions=system,
+            input=user_prompt,
+            max_output_tokens=700
+        )
         return result.output_text.strip()
     if name == "Claude":
         client = anthropic.Anthropic(api_key=keys["anthropic"])
         result = client.messages.create(
+            # Claude 5.5는 기본적으로 thinking을 사용하므로,
+            # 짧은 예능 발언에 맞춰 선행 thinking을 억제하고 답변 토큰을 확보합니다.
+            thinking={"type": "between_tools"},
             model=claude_model,
-            max_tokens=450,
+            max_tokens=1400,
             system=system,
             messages=[{"role": "user", "content": user_prompt}]
         )
@@ -106,7 +115,13 @@ def call_model(name, history):
             if getattr(block, "type", "") == "text" and getattr(block, "text", "").strip()
         ]
         if not text_parts:
-            raise RuntimeError("Claude API가 빈 답변을 반환했습니다. 모델 ID와 API 사용량을 확인해 주세요.")
+            stop_reason = getattr(result, "stop_reason", "알 수 없음")
+            usage = getattr(result, "usage", None)
+            output_tokens = getattr(usage, "output_tokens", "알 수 없음") if usage else "알 수 없음"
+            raise RuntimeError(
+                f"Claude가 텍스트 없이 응답했습니다 (stop_reason={stop_reason}, "
+                f"output_tokens={output_tokens}). Claude 모델 ID와 API 사용량을 확인해 주세요."
+            )
         return "\n".join(text_parts).strip()
 
     # 중요: Client 객체를 변수에 보관해야 합니다.
@@ -116,9 +131,24 @@ def call_model(name, history):
     result = client.models.generate_content(
         model=gemini_model,
         contents=user_prompt,
-        config={"system_instruction": system, "max_output_tokens": 450}
+        config={"system_instruction": system, "max_output_tokens": 900}
     )
-    answer = (result.text or "").strip()
+    # response.text 편의 속성이 비어 있거나 예외를 내는 경우에도
+    # 실제 후보의 텍스트 파트를 직접 모아 답변을 복구합니다.
+    answer = ""
+    try:
+        answer = (result.text or "").strip()
+    except (ValueError, AttributeError):
+        answer = ""
+    if not answer:
+        collected = []
+        for candidate in (getattr(result, "candidates", None) or []):
+            content = getattr(candidate, "content", None)
+            for part in (getattr(content, "parts", None) or []):
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    collected.append(part_text)
+        answer = "\\n".join(collected).strip()
     if not answer:
         raise RuntimeError("Gemini API가 빈 답변을 반환했습니다. 모델 ID와 API 사용량을 확인해 주세요.")
     return answer
