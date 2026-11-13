@@ -94,10 +94,34 @@ def call_model(name, history):
         result = OpenAI(api_key=keys["openai"]).responses.create(model=openai_model, instructions=system, input=user_prompt, max_output_tokens=450)
         return result.output_text.strip()
     if name == "Claude":
-        result = anthropic.Anthropic(api_key=keys["anthropic"]).messages.create(model=claude_model, max_tokens=450, system=system, messages=[{"role": "user", "content": user_prompt}])
-        return "\n".join(x.text for x in result.content if getattr(x, "type", "") == "text").strip()
-    result = genai.Client(api_key=keys["gemini"]).models.generate_content(model=gemini_model, contents=user_prompt, config={"system_instruction": system, "max_output_tokens": 450})
-    return (result.text or "응답이 비어 있습니다.").strip()
+        client = anthropic.Anthropic(api_key=keys["anthropic"])
+        result = client.messages.create(
+            model=claude_model,
+            max_tokens=450,
+            system=system,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+        text_parts = [
+            block.text for block in result.content
+            if getattr(block, "type", "") == "text" and getattr(block, "text", "").strip()
+        ]
+        if not text_parts:
+            raise RuntimeError("Claude API가 빈 답변을 반환했습니다. 모델 ID와 API 사용량을 확인해 주세요.")
+        return "\n".join(text_parts).strip()
+
+    # 중요: Client 객체를 변수에 보관해야 합니다.
+    # 임시 객체에서 바로 .models.generate_content()를 호출하면
+    # google-genai/httpx에서 'client has been closed' 오류가 날 수 있습니다.
+    client = genai.Client(api_key=keys["gemini"])
+    result = client.models.generate_content(
+        model=gemini_model,
+        contents=user_prompt,
+        config={"system_instruction": system, "max_output_tokens": 450}
+    )
+    answer = (result.text or "").strip()
+    if not answer:
+        raise RuntimeError("Gemini API가 빈 답변을 반환했습니다. 모델 ID와 API 사용량을 확인해 주세요.")
+    return answer
 
 st.markdown("---")
 st.subheader("💬 실시간 토론")
@@ -132,7 +156,12 @@ if st.session_state.chat_started and not st.session_state.debate_completed:
                 try:
                     answer = call_model(speaker, st.session_state.chat_messages)
                 except Exception as error:
-                    answer = f"⚠️ 응답 실패: `{type(error).__name__}: {error}`\n\nAPI 키, 모델 ID, 결제 및 사용 한도를 확인해 주세요."
+                    answer = (
+                        f"⚠️ **{speaker} 응답 실패**\n\n"
+                        f"`{type(error).__name__}: {error}`\n\n"
+                        "이 AI의 API 키, 모델 ID, 결제/사용 한도를 확인해 주세요. "
+                        "다른 AI의 발언은 계속 진행됩니다."
+                    )
             st.markdown(answer)
         st.session_state.chat_messages.append({"speaker": speaker, "content": answer, "time": datetime.now().strftime("%H:%M:%S")})
         progress.progress((index + 1) / total, text=f"{speaker} 발언 완료 ({index + 1}/{total})")
